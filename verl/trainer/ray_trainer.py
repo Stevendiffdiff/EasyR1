@@ -31,6 +31,7 @@ import torch
 from ray.experimental.tqdm_ray import tqdm
 from torchdata.stateful_dataloader import StatefulDataLoader
 from transformers import PreTrainedTokenizer, ProcessorMixin
+from torch.utils.tensorboard import SummaryWriter
 
 from ..protocol import DataProto, pad_dataproto_to_divisor, unpad_dataproto
 from ..single_controller.base import Worker
@@ -242,6 +243,11 @@ class RayPPOTrainer:
         config.worker.actor.optim.training_steps = self.training_steps
         config.worker.critic.optim.training_steps = self.training_steps
         print(f"Total training steps: {self.training_steps}")
+
+        # TensorBoard writer
+        tb_log_dir = os.path.join("logs", "tensorboard", getattr(config.trainer, "experiment_name", "default"))
+        os.makedirs(tb_log_dir, exist_ok=True)
+        self.tb_writer = SummaryWriter(log_dir=tb_log_dir)
 
     def init_workers(self) -> None:
         """Init resource pool and worker group"""
@@ -663,6 +669,11 @@ class RayPPOTrainer:
             metrics.update(compute_throughout_metrics(batch=batch, timing_raw=timing_raw, num_gpus=num_gpus))
 
             self.logger.log(data=metrics, step=self.global_step)
+            # === TensorBoard logging ===
+            for k, v in metrics.items():
+                if isinstance(v, (int, float)):
+                    self.tb_writer.add_scalar(k, v, self.global_step)
+            # ==========================
             main_tqdm.update()
 
         # perform validation after training
@@ -679,3 +690,5 @@ class RayPPOTrainer:
 
         if self.config.trainer.save_freq <= 0 or self.global_step % self.config.trainer.save_freq != 0:
             self._save_checkpoint()
+        # === Close TensorBoard writer ===
+        self.tb_writer.close()

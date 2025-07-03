@@ -13,6 +13,21 @@
 # limitations under the License.
 
 import json
+import os
+import sys
+
+print("当前工作目录（os.getcwd()）:", os.getcwd())
+print("sys.path:", sys.path)
+print("当前文件绝对路径:", os.path.abspath(__file__))
+print("当前文件所在目录:", os.path.dirname(os.path.abspath(__file__)))
+print("根目录下所有文件和文件夹:", os.listdir(os.getcwd()))
+
+root_dir = os.getcwd()
+print("根目录下所有包（含 __init__.py 的文件夹）:")
+for name in os.listdir(root_dir):
+    full_path = os.path.join(root_dir, name)
+    if os.path.isdir(full_path) and "__init__.py" in os.listdir(full_path):
+        print("  -", name)
 
 import ray
 from omegaconf import OmegaConf
