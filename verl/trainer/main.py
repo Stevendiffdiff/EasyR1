@@ -63,6 +63,8 @@ class Runner:
             trust_remote_code=config.worker.actor.model.trust_remote_code,
             use_fast=True,
         )
+        print(config.worker.actor.model.model_path, config.data.override_chat_template, config.worker.actor.model.trust_remote_code, True,)
+        print(f"[DEBUG] Processor is {'not' if processor is None else ''} successfully inited.")
 
         # define worker classes
         ray_worker_group_cls = RayWorkerGroup

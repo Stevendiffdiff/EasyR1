@@ -123,6 +123,9 @@ class Worker(WorkerHelper):
             os.environ.update(rank_zero_info)
 
     def __init__(self, cuda_visible_devices=None) -> None:
+        print("[CUDA CHECK][Worker.__init__] CUDA_VISIBLE_DEVICES:", os.environ.get("CUDA_VISIBLE_DEVICES"))
+        print("[CUDA CHECK][Worker.__init__] torch.cuda.is_available():", torch.cuda.is_available())
+        print("[CUDA CHECK][Worker.__init__] torch.cuda.device_count():", torch.cuda.device_count())
         # construct a meta from envrionment variable. Note that the import must be inside the class because it is executed remotely
         world_size = int(os.getenv("WORLD_SIZE"))
         rank = int(os.getenv("RANK"))

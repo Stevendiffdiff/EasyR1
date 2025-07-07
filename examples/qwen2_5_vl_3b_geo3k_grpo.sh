@@ -8,7 +8,7 @@ MODEL_PATH="/root/autodl-tmp/model/Qwen/Qwen2.5-VL-3B-Instruct"  # replace it wi
 
 python3 -m verl.trainer.main \
     config=examples/config.yaml \
-    data.train_files=hiyouga/geometry3k@train \ 
+    data.train_files=hiyouga/geometry3k@train \
     data.val_files=hiyouga/geometry3k@test \
     worker.actor.model.model_path=${MODEL_PATH} \
     worker.rollout.tensor_parallel_size=1 \

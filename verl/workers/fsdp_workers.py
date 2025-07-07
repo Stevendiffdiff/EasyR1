@@ -59,7 +59,8 @@ from .config import ActorConfig, CriticConfig, FSDPConfig, ModelConfig, OptimCon
 from .rollout import vLLMRollout
 from .sharding_manager import FSDPVLLMShardingManager
 from .sharding_manager.fsdp_ulysses import FSDPUlyssesShardingManager
-
+import ray
+import os
 
 class FSDPWorker(Worker):
     def __init__(
@@ -67,6 +68,9 @@ class FSDPWorker(Worker):
         config: WorkerConfig,
         role: Literal["actor", "critic", "rollout", "ref", "actor_rollout", "actor_rollout_ref"],
     ):
+        print("[CUDA CHECK][FSDPWorker.__init__] CUDA_VISIBLE_DEVICES:", os.environ.get("CUDA_VISIBLE_DEVICES"))
+        print("[CUDA CHECK][FSDPWorker.__init__] torch.cuda.is_available():", torch.cuda.is_available())
+        print("[CUDA CHECK][FSDPWorker.__init__] torch.cuda.device_count():", torch.cuda.device_count())
         super().__init__()
         self.config = config
         self.role = role
@@ -205,7 +209,7 @@ class FSDPWorker(Worker):
                 config=self.model_config,
                 torch_dtype=torch_dtype,
                 attn_implementation="flash_attention_2",
-                device_map="cpu" if fsdp_config.enable_rank0_init else "cuda",
+                device_map=torch.cuda.current_device(),
                 low_cpu_mem_usage=True,
                 trust_remote_code=model_config.trust_remote_code,
             )
@@ -220,7 +224,8 @@ class FSDPWorker(Worker):
 
         model = cast(PreTrainedModel, model)  # lint
         model.tie_weights()  # avoid hanging
-        model = model.to(torch_dtype)
+        print(f"[DEBUG] Model device = {model.device}")
+
         if model_config.enable_gradient_checkpointing:
             model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
 
@@ -273,6 +278,7 @@ class FSDPWorker(Worker):
             sync_module_states = False
             param_init_fn = None
 
+        print(f"[DEBUG] Current device = {torch.cuda.current_device()}")
         fsdp_module = FSDP(
             model,
             sharding_strategy=sharding_strategy,
@@ -287,6 +293,7 @@ class FSDPWorker(Worker):
             device_mesh=self.device_mesh,
         )
         print_gpu_memory_usage("After FSDP module init")
+        print(f"[DEBUG] FSDP device = {fsdp_module.device}")
 
         if role in ["actor", "critic"]:
             self.fsdp_module = fsdp_module
@@ -547,6 +554,7 @@ class FSDPWorker(Worker):
         self.rollout_sharding_manager.offload_vllm()
 
     @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
+    ## Here, generate seqs!
     def generate_sequences(self, prompts: DataProto):
         assert self._has_rollout
 
@@ -693,3 +701,50 @@ class FSDPWorker(Worker):
 
         output = output.to("cpu")
         return output
+
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def forward_and_loss(self, model_inputs: dict, labels=None, return_outputs=True):
+        print("[CUDA CHECK][FSDPWorker.forward_and_loss] CUDA_VISIBLE_DEVICES:", os.environ.get("CUDA_VISIBLE_DEVICES"))
+        print("[CUDA CHECK][FSDPWorker.forward_and_loss] torch.cuda.is_available():", torch.cuda.is_available())
+        print("[CUDA CHECK][FSDPWorker.forward_and_loss] torch.cuda.device_count():", torch.cuda.device_count())
+        device = torch.cuda.current_device()
+        print(f"[DEBUG] [forward_and_loss] Target device = {device}")
+        self.fsdp_module = self.fsdp_module.to(device)
+        print(f"[DEBUG] [forward_and_loss] Model device = {self.fsdp_module.device}")
+        _model_inputs = {}
+        for k, v in model_inputs.items():
+            if isinstance(v, np.ndarray):
+                try:
+                    v = torch.from_numpy(v)
+                except:
+                    continue
+            if torch.is_tensor(v):
+                _model_inputs[k] = v.to(device)
+                print(f"[DEBUG] [forward_and_loss] {k} on device {_model_inputs[k].device}, shape = {v.shape}")
+            else:
+                print(f"[DEBUG] [forward_and_loss] {k} is not a tensor, type={type(v)}")
+        print(f"[DEBUG] [forward_and_loss] final model inputs: {list(_model_inputs.keys())}")
+        _model_inputs['position_ids'] = _model_inputs['position_ids'][:, 0, :]
+
+        self.fsdp_module.train()
+        # with torch.no_grad():
+        outputs = self.fsdp_module(**_model_inputs)
+        logits = outputs["logits"] if isinstance(outputs, dict) else outputs[0]
+        if labels is not None:
+            seq_len = logits.shape[1]
+            labels_tokenized = self.tokenizer(
+                    labels.tolist(),  # 如果labels是list[str]，否则labels.tolist()
+                    padding='max_length',
+                    truncation=True,
+                    max_length=seq_len,
+                    return_tensors="pt"
+                )["input_ids"]
+            print(f"[DEBUG] Size of logits is {logits.size()}, size of labels is {labels_tokenized.size()}")
+            loss_fct = torch.nn.CrossEntropyLoss(ignore_index=-100)
+            loss = loss_fct(logits.view(-1, logits.size(-1)), labels_tokenized.view(-1).to(logits.device))
+        else:
+            loss = None
+        if return_outputs:
+            return {"loss": loss.cpu() if loss is not None else None, "logits": logits.cpu()}
+        else:
+            return loss.cpu() if loss is not None else None
