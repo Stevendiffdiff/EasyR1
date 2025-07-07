@@ -37,5 +37,44 @@
             "2-1.png",
             "2-2.png"
         ]
+    },
+    {
+        "sequence": [
+            {
+                "from": "human",
+                "value": "<image1><image2>\nHow many people are in the images in total?"
+            },
+            {
+                "from": "gpt",
+                "value": "There are 4 people in the image."
+            },
+            {
+                "from": "human",
+                "value": "No, carefully count the people. You should consider all people in the two images."
+            },
+            {
+                "from": "gpt",
+                "value": "There are 5 people in the images."
+            }
+        ],
+        "image": [
+            "3-1.png",
+            "3-2.png"
+        ]
+    },
+    {
+        "sequence": [
+            {
+                "from": "human",
+                "value": "<image1>\nWhat is the color of the sky?"
+            },
+            {
+                "from": "gpt",
+                "value": "The sky is yellow."
+            }
+        ],
+        "image": [
+            "4-1.png"
+        ]
     }
 ]

@@ -1,13 +1,15 @@
 import sys
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
+from collections import defaultdict
 import re
 import requests
+import numpy as np
 from io import BytesIO
 from typing import List, Dict, Any, Optional
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, RandomSampler, SequentialSampler
+from torchdata.stateful_dataloader import StatefulDataLoader
 from datasets import load_dataset
 from PIL import Image
 from qwen_vl_utils.vision_process import fetch_video
@@ -38,6 +40,24 @@ def process_video_from_url(url: str, min_pixels: Optional[int] = None, max_pixel
     video_bytes = BytesIO(response.content)
     vision_info = {"video": video_bytes, "min_pixels": min_pixels, "max_pixels": max_pixels, "fps": video_fps}
     return fetch_video(vision_info, return_video_sample_fps=return_fps)
+
+def collate_fn(features: List[Dict[str, Any]]) -> Dict[str, Any]:
+    tensors = defaultdict(list)
+    non_tensors = defaultdict(list)
+    for feature in features:
+        for key, value in feature.items():
+            if isinstance(value, torch.Tensor):
+                tensors[key].append(value)
+            else:
+                non_tensors[key].append(value)
+
+    for key, value in tensors.items():
+        tensors[key] = torch.stack(value, dim=0)
+
+    for key, value in non_tensors.items():
+        non_tensors[key] = np.array(value, dtype=object)
+
+    return {**tensors, **non_tensors}
 
 class MultiModalSFTDataset(Dataset):
     def __init__(
@@ -257,3 +277,66 @@ class MultiModalSFTDataset(Dataset):
             "images": processed_images,
             "videos": processed_videos,
         }
+
+def create_dataloader(
+    data_path: str,
+    tokenizer: PreTrainedTokenizer,
+    processor: Optional[ProcessorMixin] = None,
+    max_length: int = 1024,
+
+    seq_key: str = "sequence",
+    image_key: str = "image",
+    video_key: str = "video",
+    image_dir: Optional[str] = None,
+    video_dir: Optional[str] = None,
+
+    format_prompt: Optional[str] = None,
+    min_pixels: Optional[int] = None,
+    max_pixels: Optional[int] = None,
+    video_fps: float = 2.0,
+    truncation: str = "right",
+
+    # dataloader params
+    shuffle: bool = True,
+    seed: int = 0,
+    train_batch_size: int = 64,
+):
+    dataset = MultiModalSFTDataset(
+        data_path=data_path,
+        tokenizer=tokenizer,
+        processor=processor,
+        max_length=max_length,
+
+        seq_key=seq_key,
+        image_key=image_key,
+        video_key=video_key,
+        image_dir=image_dir,
+        video_dir=video_dir,
+
+        format_prompt=format_prompt,
+        min_pixels=min_pixels,
+        max_pixels=max_pixels,
+        video_fps=video_fps,
+        truncation=truncation,
+    )
+    # use sampler for better ckpt resume
+    if shuffle:
+        train_dataloader_generator = torch.Generator()
+        train_dataloader_generator.manual_seed(seed)
+        sampler = RandomSampler(data_source=dataset, generator=train_dataloader_generator)
+    else:
+        sampler = SequentialSampler(data_source=dataset)
+
+    train_dataloader = StatefulDataLoader(
+        dataset=dataset,
+        batch_size=train_batch_size,
+        sampler=sampler,
+        num_workers=0,
+        collate_fn=collate_fn,
+        pin_memory=False,
+        drop_last=True,
+    )
+
+    assert len(train_dataloader) >= 1
+    print(f"Size of train dataloader: {len(train_dataloader)}")
+    return train_dataloader

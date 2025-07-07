@@ -1,7 +1,8 @@
 import os
 import torch
+from SFTTrainerConfig import SFTTrainerConfig
 from ray_SFTTrainer import SFTTrainer
-from SFTData import MultiModalSFTDataset
+from SFTData import MultiModalSFTDataset, create_dataloader
 from transformers import AutoProcessor, AutoTokenizer
 
 tokenizer = AutoTokenizer.from_pretrained(
@@ -15,29 +16,35 @@ processor = AutoProcessor.from_pretrained(
     use_fast=True,
 )
 
-dataset = MultiModalSFTDataset(
+## Check the dataset ...
+# dataset = MultiModalSFTDataset(
+#     data_path="sft/data.json",
+#     tokenizer=tokenizer,
+#     processor=processor,
+#     image_dir="/root/EasyR1/sft/image_dir",
+#     max_length=2048,
+# )
+# print(dataset.__len__())
+# item = dataset.__getitem__(1)
+# print(item['selective_mask'].sum())
+# print((item['labels'] != -100).sum())
+# for k, v in item.items():
+#     print(k, ': ', v)
+#     if torch.is_tensor(v):
+#         print(v.size())
+
+dataloader = create_dataloader(
     data_path="sft/data.json",
     tokenizer=tokenizer,
     processor=processor,
     image_dir="/root/EasyR1/sft/image_dir",
-    max_length=2048,
+    max_length=1024,
+
+    train_batch_size = 2,
 )
-print(dataset.__len__())
-item = dataset.__getitem__(1)
-print(item['selective_mask'].sum())
-print((item['labels'] != -100).sum())
-for k, v in item.items():
-    print(k, ': ', v)
-    if torch.is_tensor(v):
-        print(v.size())
 
-
-
-
-
-dataloader = None
-data_collater = None
+config = SFTTrainerConfig()
 trainer = SFTTrainer(
-
+    
 )
 trainer.fit()
