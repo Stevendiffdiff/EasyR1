@@ -1,0 +1,41 @@
+[
+    {
+        "sequence": [
+            {
+                "from": "human",
+                "value": "Provide a brief description of the given image.\n<image1>"
+            },
+            {
+                "from": "gpt",
+                "value": "The image shows a beautiful landscape with a river and mountains in the background."
+            }
+        ],
+        "image": [
+            "1-1.png"
+        ]
+    },
+    {
+        "sequence": [
+            {
+                "from": "human",
+                "value": "<image1><image2>\nWrite a terse but informative summary of the pictures."
+            },
+            {
+                "from": "gpt",
+                "value": "The pictures illustrate how to use the computer."
+            },
+            {
+                "from": "human",
+                "value": "Where is the picture from?\n<image2>"
+            },
+            {
+                "from": "gpt",
+                "value": "The picture is from Baidu."
+            }
+        ],
+        "image": [
+            "2-1.png",
+            "2-2.png"
+        ]
+    }
+]

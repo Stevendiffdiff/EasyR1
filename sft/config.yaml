@@ -1,0 +1,21 @@
+data:
+  train_files: hiyouga/math12k@train
+  val_files: hiyouga/math12k@test
+  prompt_key: problem
+  answer_key: answer
+  image_key: images
+  video_key: videos
+  image_dir: null
+  video_fps: 2.0
+  max_prompt_length: 2048
+  max_response_length: 2048
+  rollout_batch_size: 512  # equivalent to verl's data.train_batch_size
+  mini_rollout_batch_size: null  # equivalent to verl's data.gen_batch_size
+  val_batch_size: 1024
+  format_prompt: ./examples/format_prompt/math.jinja
+  override_chat_template: null
+  shuffle: true
+  seed: 1
+  min_pixels: 262144
+  max_pixels: 4194304
+  filter_overlong_prompts: true
