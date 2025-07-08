@@ -153,7 +153,7 @@ def pad_sequence_to_length(
 def postprocess_data(
     input_ids: torch.Tensor,
     attention_mask: torch.Tensor,
-    position_ids: torch.Tensor,
+    position_ids: Optional[torch.Tensor],
     max_length: int,
     pad_token_id: int,
     left_pad: bool = True,
@@ -169,16 +169,16 @@ def postprocess_data(
         attention_mask = pad_sequence_to_length(
             attention_mask, max_seq_len=max_length, pad_token_id=0, left_pad=left_pad
         )
-        position_ids = pad_sequence_to_length(position_ids, max_seq_len=max_length, pad_token_id=0, left_pad=left_pad)
+        position_ids = pad_sequence_to_length(position_ids, max_seq_len=max_length, pad_token_id=0, left_pad=left_pad) if position_ids is not None else None
     elif seq_length > max_length:
         if truncation == "left":  # actually, left truncation may not be reasonable
             input_ids = input_ids[..., -max_length:]
             attention_mask = attention_mask[..., -max_length:]
-            position_ids = position_ids[..., -max_length:]
+            position_ids = position_ids[..., -max_length:] if position_ids is not None else None
         elif truncation == "right":
             input_ids = input_ids[..., :max_length]
             attention_mask = attention_mask[..., :max_length]
-            position_ids = position_ids[..., :max_length]
+            position_ids = position_ids[..., :max_length] if position_ids is not None else None
         elif truncation == "error":
             raise RuntimeError(f"Input sequence length {seq_length} is longer than max length {max_length}.")
         else:

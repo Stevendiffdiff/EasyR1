@@ -12,9 +12,8 @@ from torch.utils.data import Dataset, RandomSampler, SequentialSampler
 from torchdata.stateful_dataloader import StatefulDataLoader
 from datasets import load_dataset
 from PIL import Image
-from qwen_vl_utils.vision_process import fetch_video
+from qwen_vl_utils import fetch_video
 from transformers import PreTrainedTokenizer, ProcessorMixin
-from verl.models.transformers.qwen2_vl import get_rope_index
 from verl.utils import torch_functional as VF
 
 
@@ -51,13 +50,24 @@ def collate_fn(features: List[Dict[str, Any]]) -> Dict[str, Any]:
             else:
                 non_tensors[key].append(value)
 
+    model_inputs, loss_inputs, raw_inputs = {}, {}, {}
+
     for key, value in tensors.items():
-        tensors[key] = torch.stack(value, dim=0)
+        if key in ['input_ids', 'attention_mask']:
+            model_inputs[key] = torch.stack(value, dim=0)
+        elif key in ['pixel_values', 'image_grid_thw']:
+            model_inputs[key] = torch.concat(value, dim=0)
+        elif key in ['selective_mask', 'labels']:
+            loss_inputs[key] = torch.stack(value, dim=0)
 
     for key, value in non_tensors.items():
-        non_tensors[key] = np.array(value, dtype=object)
+        raw_inputs[key] = np.array(value, dtype=object)
 
-    return {**tensors, **non_tensors}
+    return dict(
+        model_inputs=model_inputs,
+        loss_inputs=loss_inputs,
+        raw_inputs=raw_inputs,
+    )
 
 class MultiModalSFTDataset(Dataset):
     def __init__(
@@ -133,11 +143,11 @@ class MultiModalSFTDataset(Dataset):
         # sequence: List[Dict], each dict has 'from' and 'value'
         sequence_list = example[self.seq_key]
         images = example.get(self.image_key, [])
-        print(f"[DEBUG] images = {images}")
+        # print(f"[DEBUG] images = {images}")
         videos = example.get(self.video_key, [])
         if self.image_dir is not None and len(images) != 0 and isinstance(images[0], str):  # image paths
             images = [os.path.join(self.image_dir, image) for image in images]
-            print(f"[DEBUG] images = {images}")
+            # print(f"[DEBUG] images = {images}")
         if self.video_dir is not None and len(videos) != 0 and isinstance(videos[0], str):  # video paths
             videos = [os.path.join(self.video_dir, video) for video in videos]
 
@@ -154,10 +164,10 @@ class MultiModalSFTDataset(Dataset):
 
         # 解析 <image1>/<video1> 占位符
         image_pattern = re.compile(r"<image(\d+)>")
-        print(f"[DEBUG] image_pattern = {image_pattern}")
+        # print(f"[DEBUG] image_pattern = {image_pattern}")
         video_pattern = re.compile(r"<video(\d+)>")
         image_indices = [int(m.group(1)) - 1 for m in image_pattern.finditer(concat_text)]
-        print(f"[DEBUG] image_indices = {image_indices}, in {concat_text}")
+        # print(f"[DEBUG] image_indices = {image_indices}, in {concat_text}")
         video_indices = [int(m.group(1)) - 1 for m in video_pattern.finditer(concat_text)]
         sequence_for_tokenize = image_pattern.sub("<image>", concat_text)
         sequence_for_tokenize = video_pattern.sub("<video>", sequence_for_tokenize)
@@ -179,7 +189,7 @@ class MultiModalSFTDataset(Dataset):
 
         # 下载并处理图片/视频
         processed_images = [process_image_from_url(images[i], self.min_pixels, self.max_pixels) for i in image_indices] if images else None
-        print(f"[DEBUG] processed_images = {processed_images}")
+        # print(f"[DEBUG] processed_images = {processed_images}")
         processed_videos = [process_video_from_url(videos[i], self.min_pixels, self.max_pixels, self.video_fps) for i in video_indices] if videos else None
 
         # 编码
@@ -194,6 +204,7 @@ class MultiModalSFTDataset(Dataset):
                     processed_images, [prompt], add_special_tokens=False, return_tensors="pt",
                     processor_kwargs={}, mm_load_kwargs={}
                 )
+                # print(f"[DEBUG] templated prompt = {prompt}")
             elif processed_videos and not processed_images:
                 prompt = self.processor.apply_chat_template(
                     messages, add_generation_prompt=True, tokenize=False,
@@ -219,36 +230,18 @@ class MultiModalSFTDataset(Dataset):
         input_ids = model_inputs["input_ids"][0]
         attention_mask = model_inputs["attention_mask"][0]
 
-        # 位置编码
-        image_processor = getattr(self.processor, "image_processor", None) if self.processor is not None else None
-        if image_processor is not None and "Qwen2VLImageProcessor" in image_processor.__class__.__name__:
-            position_ids = get_rope_index(
-                self.processor,  # type: ignore
-                input_ids=input_ids,
-                image_grid_thw=model_inputs.get("image_grid_thw", None),
-                video_grid_thw=model_inputs.get("video_grid_thw", None),
-                second_per_grid_ts=model_inputs.get("second_per_grid_ts", None),
-                attention_mask=attention_mask,
-            )
-        else:
-            position_ids = torch.clip(attention_mask.cumsum(dim=0) - 1, min=0, max=None)
-
         # pad/truncation
         truncation_mode = self.truncation if self.truncation in ("left", "right", "error") else "right"
         pad_token_id = int(self.tokenizer.pad_token_id) if self.tokenizer.pad_token_id is not None else 0
-        input_ids, attention_mask, position_ids = VF.postprocess_data(
+        input_ids, attention_mask, _ = VF.postprocess_data(
             input_ids=input_ids,
             attention_mask=attention_mask,
-            position_ids=position_ids,
+            position_ids=None,
             max_length=self.max_length,
             pad_token_id=pad_token_id,
             left_pad=True,
             truncation=truncation_mode,
         )
-
-        # labels
-        labels = input_ids.clone()
-        labels[attention_mask == 0] = -100
 
         # selective_mask: 只对gpt生成的token为1
         selective_mask = torch.zeros_like(input_ids)
@@ -267,10 +260,16 @@ class MultiModalSFTDataset(Dataset):
                     for i in range(seg_start, seg_end):
                         selective_mask[i] = 1
 
+        # labels
+        labels = input_ids.clone()
+        labels[selective_mask == 0] = -100
+
         return {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
-            "position_ids": position_ids,
+            "image_grid_thw": model_inputs.get("image_grid_thw", None),
+            "video_grid_thw": model_inputs.get("video_grid_thw", None),
+            "pixel_values": model_inputs.get("pixel_values", None),
             "labels": labels,
             "selective_mask": selective_mask,
             "raw_sequence": sequence_list,
@@ -337,6 +336,6 @@ def create_dataloader(
         drop_last=True,
     )
 
-    assert len(train_dataloader) >= 1
+    assert len(train_dataloader) >= 1, "Invalid train_dataloader! The size of the loader = 0!"
     print(f"Size of train dataloader: {len(train_dataloader)}")
     return train_dataloader
